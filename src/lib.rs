@@ -13,6 +13,8 @@ use glutin::GlContext;
 use gfx::format::{Depth, Rgba8};
 use image::{GenericImage, RgbaImage};
 use gfx::Factory;
+use gfx::texture::ImageInfoCommon;
+use gfx::format::R8_G8_B8_A8;
 
 pub type ColorFormat = gfx::format::Rgba8;
 pub type DepthFormat = gfx::format::DepthStencil;
@@ -107,9 +109,24 @@ pub fn run_example() {
     println!("time for textures");
     let a = image::open("resources/textures/0_layer.png").unwrap().to_rgba().into_raw();
     let b = image::open("resources/textures/1_layer.png").unwrap().to_rgba().into_raw();
+
     let data : Vec<&[u8]> = vec![&a, &b];
     let kind = texture::Kind::D2Array(64, 64, 2, gfx::texture::AaMode::Single);
     let (texture, texture_view) = factory.create_texture_immutable_u8::<Rgba8>(kind, &data).unwrap();
+    // texture: gfx::handle::Texture<gfx_device_gl::Resources, gfx::format::R8_G8_B8_A8>
+    // texture_view: gfx::handle::ShaderResourceView<gfx_device_gl::Resources, [f32; 4]>
+
+
+    // fn create_texture<S>(&mut self, kind: texture::Kind, levels: target::Level,
+//    bind: Bind, usage: Usage, channel_hint: Option<format::ChannelType>)
+    let bind = gfx::SHADER_RESOURCE;
+    let cty = gfx::format::ChannelType::Unorm;
+    let tex_mut = factory.create_texture(kind, 1, bind, gfx::memory::Usage::Dynamic, Some(cty)).unwrap();
+    // gfx::handle::Texture<gfx_device_gl::Resources, gfx::format::R8_G8_B8_A8>
+    let tex_mut_view = factory.view_texture_as_shader_resource::<Rgba8>(&tex_mut, (0, 0), gfx::format::Swizzle::new()).unwrap();
+    // gfx::handle::ShaderResourceView<gfx_device_gl::Resources, [f32; 4]>
+
+    let mut texture_uploaded = false;
 
     println!("textures done");
 
@@ -125,7 +142,7 @@ pub fn run_example() {
 
     let mut opaque_data = pipe_no_blend::Data {
         vbuf: vb_a.clone(),
-        texture: (texture_view.clone(), sampler.clone()),
+        texture: (tex_mut_view.clone(), sampler.clone()),
         locals: factory.create_constant_buffer(1),
         out_color: main_color.clone(),
         out_depth: main_depth.clone(),
@@ -133,14 +150,18 @@ pub fn run_example() {
 
     let mut blend_data = pipe_blend::Data {
         vbuf: vb_b.clone(),
-        texture: (texture_view.clone(), sampler.clone()),
+        texture: (tex_mut_view.clone(), sampler.clone()),
         locals: factory.create_constant_buffer(1),
         out_color: main_color.clone(),
         out_depth: main_depth.clone(),
     };
 
+    let mut n = 0;
+
     let mut running = true;
     while running {
+        n += 1;
+
         // fetch events
         events_loop.poll_events(|event| {
             if let glutin::Event::WindowEvent { event, .. } = event {
@@ -178,6 +199,54 @@ pub fn run_example() {
         };
         encoder.update_constant_buffer(&opaque_data.locals, &locals);
         encoder.update_constant_buffer(&blend_data.locals, &locals);
+
+        if !texture_uploaded {
+            println!("uploading textures");
+            let mut image_info = ImageInfoCommon {
+                xoffset: 0,
+                yoffset: 0,
+                zoffset: 0,
+                width: 64,
+                height: 64,
+                depth: 1,
+                format: (),
+                mipmap: 0,
+            };
+
+            let mut data : Vec<[u8; 4]> = a.chunks(4).map(|sl| [sl[0], sl[1], sl[2], sl[3]]).collect();
+
+            encoder.update_texture::<R8_G8_B8_A8, Rgba8>(
+                &tex_mut,
+                None,
+                image_info,
+                &data,
+            ).unwrap();
+
+            texture_uploaded = true;
+        }
+
+        let mut image_info = ImageInfoCommon {
+            xoffset: 0,
+            yoffset: 0,
+            zoffset: 1,
+            width: 64,
+            height: 64,
+            depth: 1,
+            format: (),
+            mipmap: 0,
+        };
+
+        let mut data : Vec<[u8; 4]> = Vec::new();
+        for i in 0..(64 * 64) {
+            let mn = (n % 255) as u8;
+            data.push([mn, mn, mn, 255]);
+        }
+        encoder.update_texture::<R8_G8_B8_A8, Rgba8>(
+            &tex_mut,
+            None,
+            image_info,
+            &data,
+        ).unwrap();
 
         // draw a frame
         encoder.clear(&main_color, CLEAR_COLOR);
