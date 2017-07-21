@@ -7,3 +7,4 @@ authors = ["Michael Shaw <michaeljshaw@gmail.com>"]
 image = "0.14"
 gfx = "0.16"
 cgmath = "0.14"
+gfx_gl = "0.3"

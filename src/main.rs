@@ -1,3 +1,5 @@
+extern crate grax;
+
 fn main() {
-    println!("awesome");
+    grax::run_example();
 }
