@@ -1,0 +1,9 @@
+[package]
+name = "grax"
+version = "0.1.0"
+authors = ["Michael Shaw <michaeljshaw@gmail.com>"]
+
+[dependencies]
+image = "0.14"
+gfx = "0.16"
+cgmath = "0.14"
