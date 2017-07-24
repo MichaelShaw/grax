@@ -7,6 +7,6 @@ authors = ["Michael Shaw <michaeljshaw@gmail.com>"]
 image = "0.14"
 gfx = "0.16"
 cgmath = "0.14"
-gfx_gl = "0.3"
+gfx_device_gl = "0.14"
 glutin = "0.9"
 gfx_window_glutin = "0.17"

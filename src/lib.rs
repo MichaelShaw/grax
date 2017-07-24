@@ -4,6 +4,7 @@ extern crate cgmath;
 extern crate gfx;
 extern crate gfx_window_glutin;
 extern crate glutin;
+extern crate gfx_device_gl;
 
 use cgmath::SquareMatrix;
 use gfx::traits::FactoryExt;
@@ -74,6 +75,70 @@ pub fn ui_projection(width: f32, height: f32) -> cgmath::Matrix4<f32> {
 
 const CLEAR_COLOR: [f32; 4] = [0.1, 0.2, 0.3, 1.0];
 
+
+pub struct App<R, C, F, D> where R : gfx::Resources,
+                                 C : gfx::CommandBuffer<R>,
+                                 F : gfx::Factory<R>,
+                                 D : Device {
+    pub window: glutin::GlWindow,
+    pub events_loop: glutin::EventsLoop,
+    pub device: D,
+    pub factory: F,
+    pub screen_colour_target: gfx::handle::RenderTargetView<R, ColorFormat>,
+    pub screen_depth_target: gfx::handle::DepthStencilView<R, DepthFormat>,
+    pub encoder: gfx::Encoder<R, C>,
+    pub texture: Option<gfx::handle::Texture<R, Rgba8>>,
+    pub texture_view: Option<gfx::handle::ShaderResourceView<R, [f32; 4]>>,
+    pub sampler: gfx::handle::Sampler<R>,
+    // programs
+    // textures
+}
+
+pub struct NoBlendPSO<R> where R : gfx::Resources {
+    pub pipeline: gfx::PipelineState<R, pipe_no_blend::Meta>,
+    pub data : pipe_no_blend::Data<R>,
+}
+
+pub struct BlendPSO<R> where R : gfx::Resources {
+    pub pipeline: gfx::PipelineState<R, pipe_blend::Meta>,
+    pub data : pipe_blend::Data<R>,
+}
+
+pub fn construct_gl_app() -> App<gfx_device_gl::Resources, gfx_device_gl::CommandBuffer, gfx_device_gl::Factory, gfx_device_gl::Device> {
+    let width = 1024;
+    let height = 768;
+    let mut events_loop = glutin::EventsLoop::new();
+    let window_config = glutin::WindowBuilder::new()
+        .with_title("Triangle example".to_string())
+        .with_dimensions(width, height);
+    use glutin::{GlRequest, Api};
+    let context = glutin::ContextBuilder::new()
+        .with_gl(GlRequest::Specific(Api::OpenGl, (3, 3)))
+        .with_vsync(true);
+
+    //    context = 4;
+
+    let (window, mut device, mut factory, mut main_color, mut main_depth) = gfx_window_glutin::init::<ColorFormat, DepthFormat>(window_config, context, &events_loop);
+
+    let mut encoder: gfx::Encoder<_, _> = factory.create_command_buffer().into();
+
+    let sampler = factory.create_sampler_linear();
+
+    App {
+        window,
+        events_loop,
+        device,
+        factory,
+        screen_colour_target: main_color,
+        screen_depth_target: main_depth,
+        encoder: encoder,
+        texture: None,
+        texture_view: None,
+        sampler,
+    }
+}
+
+
 pub fn run_example() {
     println!("booting up");
 
@@ -89,19 +154,14 @@ pub fn run_example() {
         .with_vsync(true);
 
     let (window, mut device, mut factory, mut main_color, mut main_depth) = gfx_window_glutin::init::<ColorFormat, DepthFormat>(window_config, context, &events_loop);
+    println!("scale at boot -> {:?}", window.hidpi_factor());
+
     let mut encoder: gfx::Encoder<_, _> = factory.create_command_buffer().into();
     println!("pre pso");
-    let pso = factory.create_pipeline_simple(
-        include_bytes!("../resources/shaders/fat.vert"),
-        include_bytes!("../resources/shaders/fat.frag"),
-        pipe_no_blend::new()
-    ).unwrap();
 
-    let pso_blend = factory.create_pipeline_simple(
-        include_bytes!("../resources/shaders/fat.vert"),
-        include_bytes!("../resources/shaders/fat.frag"),
-        pipe_blend::new()
-    ).unwrap();
+    let sampler = factory.create_sampler_linear();
+
+
 
 
     println!("pso done");
@@ -122,9 +182,7 @@ pub fn run_example() {
     let bind = gfx::SHADER_RESOURCE;
     let cty = gfx::format::ChannelType::Unorm;
     let tex_mut = factory.create_texture(kind, 1, bind, gfx::memory::Usage::Dynamic, Some(cty)).unwrap();
-    // gfx::handle::Texture<gfx_device_gl::Resources, gfx::format::R8_G8_B8_A8>
     let tex_mut_view = factory.view_texture_as_shader_resource::<Rgba8>(&tex_mut, (0, 0), gfx::format::Swizzle::new()).unwrap();
-    // gfx::handle::ShaderResourceView<gfx_device_gl::Resources, [f32; 4]>
 
     let mut texture_uploaded = false;
 
@@ -138,22 +196,42 @@ pub fn run_example() {
     let (vb_a, slice_a) = factory.create_vertex_buffer_with_slice(&TRIANGLE, ());
     let (vb_b, slice_b) = factory.create_vertex_buffer_with_slice(&TRIANGLE_B, ());
 
-    let sampler = factory.create_sampler_linear();
+//    vb_a = 4; // `gfx::handle::Buffer<gfx_device_gl::Resources, Vertex>`
+//    slice_a = 8; // `gfx::Slice<gfx_device_gl::Resources>`
 
-    let mut opaque_data = pipe_no_blend::Data {
+    let pso = factory.create_pipeline_simple(
+        include_bytes!("../resources/shaders/fat.vert"),
+        include_bytes!("../resources/shaders/fat.frag"),
+        pipe_no_blend::new()
+    ).unwrap();
+    let opaque_data = pipe_no_blend::Data {
         vbuf: vb_a.clone(),
         texture: (tex_mut_view.clone(), sampler.clone()),
         locals: factory.create_constant_buffer(1),
         out_color: main_color.clone(),
         out_depth: main_depth.clone(),
     };
+    let mut opaque_pso = NoBlendPSO {
+        pipeline: pso,
+        data : opaque_data,
+    };
 
+    let pso_blend = factory.create_pipeline_simple(
+        include_bytes!("../resources/shaders/fat.vert"),
+        include_bytes!("../resources/shaders/fat.frag"),
+        pipe_blend::new()
+    ).unwrap();
     let mut blend_data = pipe_blend::Data {
         vbuf: vb_b.clone(),
         texture: (tex_mut_view.clone(), sampler.clone()),
         locals: factory.create_constant_buffer(1),
         out_color: main_color.clone(),
         out_depth: main_depth.clone(),
+    };
+
+    let mut blend_pso = BlendPSO {
+        pipeline: pso_blend,
+        data : blend_data
     };
 
     let mut n = 0;
@@ -197,8 +275,8 @@ pub fn run_example() {
             u_color: [1.0, 0.0, 0.0, 1.0],
             u_alpha_minimum: 0.1,
         };
-        encoder.update_constant_buffer(&opaque_data.locals, &locals);
-        encoder.update_constant_buffer(&blend_data.locals, &locals);
+        encoder.update_constant_buffer(&opaque_pso.data.locals, &locals);
+        encoder.update_constant_buffer(&blend_pso.data.locals, &locals);
 
         if !texture_uploaded {
             println!("uploading textures");
@@ -252,10 +330,10 @@ pub fn run_example() {
         encoder.clear(&main_color, CLEAR_COLOR);
         encoder.clear_depth(&main_depth, 1.0);
 
-        opaque_data.vbuf = vb_a.clone();
-        encoder.draw(&slice_a, &pso, &opaque_data);
+        opaque_pso.data.vbuf = vb_a.clone();
+        encoder.draw(&slice_a, &opaque_pso.pipeline, &opaque_pso.data);
         blend_data.vbuf = vb_b.clone();
-        encoder.draw(&slice_b, &pso_blend, &blend_data);
+        encoder.draw(&slice_b, &blend_pso.pipeline, &blend_pso.data);
 //        blend_data.vbuf = vb_b.clone();
 //        encoder.draw(&slice_b, &pso_blend, &blend_data);
 
